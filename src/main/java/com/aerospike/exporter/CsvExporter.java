@@ -56,68 +56,12 @@ public class CsvExporter {
 	
     private static Logger log = LogManager.getLogger(CsvExporter.class);
 
-    /**
-     * Write usage to console.
-     */
-    private static void logUsage(Options options) {
-    	HelpFormatter formatter = new HelpFormatter();
-    	StringWriter sw = new StringWriter();
-    	PrintWriter pw = new PrintWriter(sw);
-    	String syntax = CsvExporter.class.getName() + " [<options>]";
-    	formatter.printHelp(pw, 100, syntax, "options:", options, 0, 2, null);
-    	log.info(sw.toString());
-    }
-
-    /*
-    public static void main2(String[] args) throws Exception {
-    	AerospikeClient client = new AerospikeClient(null, "172.28.128.5", 3000);
-    	// Create a 16kB string
-    	StringBuffer sb = new StringBuffer(200000);
-    	for (int i = 0; i < 1024; i++) {
-    		sb.append("12567890123456");
-    	}
-    	
-    	// Insert records in the database
-    	long now = System.nanoTime();
-    	for (int j = 0; j < 2; j++) {
-        	for (int i = 0; i < 655360; i++) {
-        		client.put(null, new Key("test", "sizeTest", i), new Bin("data", sb.toString()));
-        		if (i%1024 == 1023) {
-        			System.out.printf("Done %dk in %.2fs\n", ((i+1)/1024), (System.nanoTime()-now)/1_000_000_000.0);
-        		}
-        	}
-    	}
-    	System.out.println("Done");
-    	client.close();
-    }
-    */
     public static String[] ACCEPTABLE_DATE_FORMATS = new String[] {
     		"MM/dd/yyyy-hh:mm:ss",
     		"MMMM d yyyy hh:mm:ss Z"
     };
     
-    public static Date parseOptionDate(String option) throws ParseException {
-    	if (option != null) {
-    		ParseException lastException = null;
-    		for (String format : ACCEPTABLE_DATE_FORMATS) {
-    			try {
-    				SimpleDateFormat sdf = new SimpleDateFormat(format);
-    				return sdf.parse(option);
-    			}
-    			catch (ParseException pe) {
-    				lastException = pe;
-    				continue;
-    			}
-    		}
-    		// Date did no meet any of the associated formats.
-    		log.error("Could not parse date '" + option + "' as it didn't meet any of the expected formats: " + ACCEPTABLE_DATE_FORMATS);
-    		throw lastException; 
-    	}
-    	else {
-    		return null;
-    	}
-    }
-    
+
     public static void main(String[] args) throws Exception {
         Options options = new Options();
         options.addOption("h", "host", true, "Server hostname (default: 127.0.0.1)");
@@ -177,6 +121,39 @@ public class CsvExporter {
         }
 	}
 
+    /**
+     * Write usage to console.
+     */
+    private static void logUsage(Options options) {
+    	HelpFormatter formatter = new HelpFormatter();
+    	StringWriter sw = new StringWriter();
+    	PrintWriter pw = new PrintWriter(sw);
+    	String syntax = CsvExporter.class.getName() + " [<options>]";
+    	formatter.printHelp(pw, 100, syntax, "options:", options, 0, 2, null);
+    	log.info(sw.toString());
+    }
+
+    public static Date parseOptionDate(String option) throws ParseException {
+    	if (option != null) {
+    		ParseException lastException = null;
+    		for (String format : ACCEPTABLE_DATE_FORMATS) {
+    			try {
+    				SimpleDateFormat sdf = new SimpleDateFormat(format);
+    				return sdf.parse(option);
+    			}
+    			catch (ParseException pe) {
+    				lastException = pe;
+    				continue;
+    			}
+    		}
+    		// Date did not meet any of the associated formats.
+    		log.error("Could not parse date '" + option + "' as it didn't meet any of the expected formats: " + ACCEPTABLE_DATE_FORMATS);
+    		throw lastException; 
+    	}
+    	else {
+    		return null;
+    	}
+    }
 
     private static Set<String> getSetNames(IAerospikeClient client, String namespaces, String sets) {
     	Set<String> setNames = new HashSet<>();
@@ -218,10 +195,10 @@ public class CsvExporter {
     private static void addValue(List<Object> data, Record record, String name) {
     	if (record.bins.containsKey(name)) {
     		Object value = record.getValue(name);
+    		// TODO: Put in code to handle other data types: GeoJSON, bitmap, BLOBs, etc
     		data.add(value);
     	}
     	else {
-    		// TODO: Should this be an empty string?
     		data.add(null);
     	}
     }
@@ -319,8 +296,8 @@ public class CsvExporter {
 		printer.close();
 		rewriteFileWithHeader(outputFile, combinedFilePrefix + ".csv", nameOrder);
     }
+    
 	private static void dumpData(IAerospikeClient client, String namespaces, String sets) throws IOException {
-		
 		Set<String> namespaceAndSetNames = getSetNames(client, namespaces, sets);
 		for (String namespaceAndSet : namespaceAndSetNames) {
 			String[] nameParts = namespaceAndSet.split("\\.");
@@ -332,9 +309,6 @@ public class CsvExporter {
 			
 		}
 		System.out.println();
-//		StringWriter out = new StringWriter();
-//		CSVPrinter printer = new CSVPrinter(out, CSVFormat.EXCEL);
-//		printer.
 	}
 
 }
