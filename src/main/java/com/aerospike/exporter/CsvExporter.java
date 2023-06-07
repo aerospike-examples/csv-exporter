@@ -37,6 +37,7 @@ public class CsvExporter {
     static private long maxSize = Long.MAX_VALUE;
     static private long recordLimit = 0;
     static private boolean recordMetaData = false;
+    static private boolean includeDigest = false;
     static private File directory;
 
     private static Logger log = LogManager.getLogger(CsvExporter.class);
@@ -62,6 +63,7 @@ public class CsvExporter {
         options.addOption("I", "minSize", true, "Minimum size of records to print (default: 0)");
         options.addOption("A", "maxSize", true, "Maximum size of records to print (default: unlimited)");
         options.addOption("c", "concurrency", true, "Number of sets to process concurrently (default: 1)");
+        options.addOption("D", "digest", true, "Include the digest in the output. (default false)");
 
         CommandLineParser parser = new DefaultParser();
         CommandLine cl = parser.parse(options, args, false);
@@ -81,7 +83,12 @@ public class CsvExporter {
         minSize = Long.parseLong(cl.getOptionValue("minSize", "0"));
         maxSize = Long.parseLong(cl.getOptionValue("maxSize", "" + Long.MAX_VALUE));
         int concurrentSets = Integer.parseInt(cl.getOptionValue("concurrency", "1"));
+        includeDigest = Boolean.parseBoolean(cl.getOptionValue("digest", "false"));
 
+        if (concurrentSets <= 0) {
+            log.error("Concurrent sets must be > 0, not " + concurrentSets);
+            System.exit(-1);
+        }
         if (cl.hasOption("usage")) {
             logUsage(options);
         } else {
@@ -266,7 +273,9 @@ public class CsvExporter {
 
             Expression filterExp = namespacesInMemory.contains(namespace) ? memoryFilterExp : deviceFilterExp;
             CsvSetExporter exporter = new CsvSetExporter(client, namespace, setName, filterExp, directory, log)
-                    .recordLimit(recordLimit).recordMetaData(recordMetaData);
+                    .recordLimit(recordLimit)
+                    .recordMetaData(recordMetaData)
+                    .includeDigest(includeDigest);
             executors.execute(exporter);
         }
         executors.shutdown();

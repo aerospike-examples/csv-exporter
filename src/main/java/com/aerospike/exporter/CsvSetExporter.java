@@ -26,6 +26,8 @@ import com.aerospike.client.ScanCallback;
 import com.aerospike.client.exp.Expression;
 import com.aerospike.client.policy.ScanPolicy;
 
+import gnu.crypto.util.Base64;
+
 public class CsvSetExporter implements Runnable {
     private final IAerospikeClient client;
     private final String namespace;
@@ -34,6 +36,7 @@ public class CsvSetExporter implements Runnable {
     private final File directory;
     private final Logger log;
     private boolean recordMetaData = false;
+    private boolean includeDigest = false;
     private long recordLimit = Long.MAX_VALUE;
 
     public CsvSetExporter(IAerospikeClient client, String namespace, String setName, Expression filterExp,
@@ -56,6 +59,11 @@ public class CsvSetExporter implements Runnable {
         this.recordLimit = recordLimit;
         return this;
     }
+    
+    public CsvSetExporter includeDigest(boolean includeDigest) {
+        this.includeDigest = includeDigest;
+        return this;
+    }
 
     private void addValue(List<Object> data, Record record, String name) {
         if (record.bins.containsKey(name)) {
@@ -75,13 +83,22 @@ public class CsvSetExporter implements Runnable {
                 nameOrder.add(0, "_generation");
                 nameOrder.add(1, "_expiry");
             }
+            if (includeDigest) {
+                nameOrder.add(0, "_digest");
+            }
         }
         List<Object> data = new ArrayList<>();
+        int extraColumnCount = 0;
+        if (includeDigest) {
+            data.add(Base64.encode(key.digest));
+            extraColumnCount++;
+        }
         if (recordMetaData) {
             data.add(record.generation);
             data.add(record.expiration);
+            extraColumnCount += 2;
         }
-        for (int i = recordMetaData ? 2 : 0; i < nameOrder.size(); i++) {
+        for (int i = extraColumnCount; i < nameOrder.size(); i++) {
             addValue(data, record, nameOrder.get(i));
         }
         // We need to add any new columns too.
