@@ -14,6 +14,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import com.aerospike.client.Host;
+import com.aerospike.client.policy.AuthMode;
+import com.aerospike.client.policy.TlsPolicy;
+import com.aerospike.client.util.Util;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -46,7 +50,18 @@ public class CsvExporter {
 
     public static void main(String[] args) throws Exception {
         Options options = new Options();
-        options.addOption("h", "host", true, "Server hostname (default: 127.0.0.1)");
+        options.addOption("h", "host", true,
+                "List of seed hosts in format:\n" +
+                        "hostname1[:tlsname][:port1],...\n" +
+                        "The tlsname is only used when connecting with a secure TLS enabled server. " +
+                        "If the port is not specified, the default port is used.\n" +
+                        "IPv6 addresses must be enclosed in square brackets.\n" +
+                        "Default: localhost\n" +
+                        "Examples:\n" +
+                        "host1\n" +
+                        "host1:3000,host2:3000\n" +
+                        "192.168.1.10:cert1:3000,[2001::1111]:cert2:3000\n"
+        );
         options.addOption("p", "port", true, "Server port (default: 3000)");
         options.addOption("n", "namespace", true,
                 "Comma separated list of Namespaces to print, or omit for all sets. Regular expressions are supported. (default: none, print all namespace)");
@@ -65,23 +80,56 @@ public class CsvExporter {
         options.addOption("c", "concurrency", true, "Number of sets to process concurrently (default: 1)");
         options.addOption("D", "digest", true, "Include the digest in the output. (default false)");
 
+        // TLS
+        options.addOption("tls", "tlsEnable", false, "Use TLS/SSL sockets");
+        options.addOption("tp", "tlsProtocols", true,
+                "Allow TLS protocols\n" +
+                        "Values:  TLSv1,TLSv1.1,TLSv1.2 separated by comma\n" +
+                        "Default: TLSv1.2"
+        );
+        options.addOption("tlsCiphers", "tlsCipherSuite", true,
+                "Allow TLS cipher suites\n" +
+                        "Values:  cipher names defined by JVM separated by comma\n" +
+                        "Default: null (default cipher list provided by JVM)"
+        );
+        options.addOption("tr", "tlsRevoke", true,
+                "Revoke certificates identified by their serial number\n" +
+                        "Values:  serial numbers separated by comma\n" +
+                        "Default: null (Do not revoke certificates)"
+        );
+        options.addOption("tlsLoginOnly", false, "Use TLS/SSL sockets on node login only");
+        options.addOption("auth", true, "Authentication mode. Values: " + Arrays.toString(AuthMode.values()));
+
+
         CommandLineParser parser = new DefaultParser();
         CommandLine cl = parser.parse(options, args, false);
 
-        String host = cl.getOptionValue("h", "127.0.0.1");
-        String portString = cl.getOptionValue("p", "3000");
-        int port = Integer.parseInt(portString);
+        if (cl.hasOption("usage")) {
+            logUsage(options);
+            return;
+        }
+
+        Parameters params = parseConnectionParameters(cl);
+
+//        String host = cl.getOptionValue("h", "127.0.0.1");
+//        String portString = cl.getOptionValue("p", "3000");
+//        int port = Integer.parseInt(portString);
+//        String user = cl.getOptionValue("user");
+//        String password = cl.getOptionValue("password");
+
         String namespace = cl.getOptionValue("n", "test");
         String sets = cl.getOptionValue("s");
+
         recordLimit = Long.parseLong(cl.getOptionValue("l", "0"));
         Date fromDate = parseOptionDate(cl.getOptionValue("from"));
         Date toDate = parseOptionDate(cl.getOptionValue("to"));
-        String user = cl.getOptionValue("user");
-        String password = cl.getOptionValue("password");
+
         directory = new File(cl.getOptionValue("directory", "."));
         recordMetaData = Boolean.parseBoolean(cl.getOptionValue("m", "false"));
+
         minSize = Long.parseLong(cl.getOptionValue("minSize", "0"));
         maxSize = Long.parseLong(cl.getOptionValue("maxSize", "" + Long.MAX_VALUE));
+
         int concurrentSets = Integer.parseInt(cl.getOptionValue("concurrency", "1"));
         includeDigest = Boolean.parseBoolean(cl.getOptionValue("digest", "false"));
 
@@ -89,30 +137,87 @@ public class CsvExporter {
             log.error("Concurrent sets must be > 0, not " + concurrentSets);
             System.exit(-1);
         }
-        if (cl.hasOption("usage")) {
-            logUsage(options);
-        } else {
-            log.debug("Host: " + host);
-            log.debug("Port: " + port);
-            log.debug("Namespace: " + namespace);
-            log.debug("Sets: " + sets);
-            log.debug("Limit: " + recordLimit);
-            log.debug("Date range: " + fromDate + " to " + toDate);
-            log.debug("Concurrent sets: " + concurrentSets);
 
-            startTimeInNs = fromDate == null ? 0
-                    : TimeUnit.NANOSECONDS.convert(fromDate.getTime(), TimeUnit.MILLISECONDS);
-            endTimeInNs = toDate == null ? Long.MAX_VALUE
-                    : TimeUnit.NANOSECONDS.convert(toDate.getTime(), TimeUnit.MILLISECONDS);
+        log.debug("ConnParams: "  + params);
+//        log.debug("Host: " + params.host);
+//        log.debug("Port: " + params.port);
+//        log.debug("" + params.tlsPolicy);
+        log.debug("Namespace: " + namespace);
+        log.debug("Sets: " + sets);
+        log.debug("Limit: " + recordLimit);
+        log.debug("Date range: " + fromDate + " to " + toDate);
+        log.debug("Concurrent sets: " + concurrentSets);
 
-            ClientPolicy cp = new ClientPolicy();
-            cp.user = user;
-            cp.password = password;
+        startTimeInNs = fromDate == null ? 0
+                : TimeUnit.NANOSECONDS.convert(fromDate.getTime(), TimeUnit.MILLISECONDS);
+        endTimeInNs = toDate == null ? Long.MAX_VALUE
+                : TimeUnit.NANOSECONDS.convert(toDate.getTime(), TimeUnit.MILLISECONDS);
 
-            IAerospikeClient client = new AerospikeClient(cp, host, port);
-            dumpData(client, namespace, sets, concurrentSets);
-            client.close();
+        ClientPolicy policy = new ClientPolicy();
+        policy.user = params.user;
+        policy.password = params.password;
+        policy.authMode = params.authMode;
+        policy.tlsPolicy = params.tlsPolicy;
+
+        Host[] hosts = Host.parseHosts(params.host, params.port);
+
+        IAerospikeClient client = new AerospikeClient(policy, hosts);
+        dumpData(client, namespace, sets, concurrentSets);
+        client.close();
+    }
+    private static Parameters parseConnectionParameters(CommandLine cl) throws Exception {
+
+        String host = cl.getOptionValue("h", "127.0.0.1");
+        String portString = cl.getOptionValue("p", "3000");
+        int port = Integer.parseInt(portString);
+
+        String user = cl.getOptionValue("U");
+        String password = cl.getOptionValue("P");
+
+        if (user != null && password == null) {
+            java.io.Console console = System.console();
+
+            if (console != null) {
+                char[] pass = console.readPassword("Enter password:");
+
+                if (pass != null) {
+                    password = new String(pass);
+                }
+            }
         }
+
+        TlsPolicy tlsPolicy = null;
+        boolean tlsEnabled = false;
+        if (cl.hasOption("tls")) {
+            tlsEnabled = true;
+            tlsPolicy = new TlsPolicy();
+
+            if (cl.hasOption("tp")) {
+                String s = cl.getOptionValue("tp", "");
+                tlsPolicy.protocols = s.split(",");
+            }
+
+            if (cl.hasOption("tlsCiphers")) {
+                String s = cl.getOptionValue("tlsCiphers", "");
+                tlsPolicy.ciphers = s.split(",");
+            }
+
+            if (cl.hasOption("tr")) {
+                String s = cl.getOptionValue("tr", "");
+                tlsPolicy.revokeCertificates = Util.toBigIntegerArray(s);
+            }
+
+            if (cl.hasOption("tlsLoginOnly")) {
+                tlsPolicy.forLoginOnly = true;
+            }
+        }
+
+        AuthMode authMode = AuthMode.INTERNAL;
+        if (cl.hasOption("auth")) {
+            authMode = AuthMode.valueOf(cl.getOptionValue("auth", "").toUpperCase());
+        }
+
+        return new Parameters(tlsPolicy, tlsEnabled, host, port, user, password, authMode);
     }
 
     /**
